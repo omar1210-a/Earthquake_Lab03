@@ -1,1 +1,257 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <title>Olympia, WA — Map & List</title>
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
 
+  <!-- Mapbox CSS/JS -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.js"></script>
+
+  <style>
+    /* Full-screen map */
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+    #map {
+      position: fixed; /* full-bleed background */
+      inset: 0;
+    }
+
+    /* Side panel overlays the map on the RIGHT */
+    #side-panel {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 380px;
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      box-sizing: border-box;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      backdrop-filter: blur(4px);
+    }
+
+    h2 {
+      margin: 0 0 12px 0;
+      font-size: 1.25rem;
+    }
+
+    button {
+      margin: 8px 0 12px 0;
+      cursor: pointer;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      background: #f7f7f7;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      border: 1px solid #ddd;
+      font-size: 0.95rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+    }
+    th {
+      background: #fafafa;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tr:nth-child(even) { background-color: #f6f6f6; }
+
+    /* Hide side panel on narrower screens (< 1024px) */
+    @media (max-width: 1024px) {
+      #side-panel { display: none; }
+    }
+
+    /* Small helper for legend badge */
+    .legend {
+      display: flex; gap: 10px; align-items: center; margin-bottom: 8px;
+    }
+    .badge {
+      display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
+    }
+    .parks { background: #2ecc71; }
+    .neigh { background: #3498db; border-radius: 2px; width: 16px; height: 12px; }
+  </style>
+</head>
+<body>
+  <!-- Full-screen map -->
+  <div id="map"></div>
+
+  <!-- Overlay side panel (title + table + sort) -->
+  <aside id="side-panel">
+    <h2>Olympia, WA — Parks & Neighborhoods</h2>
+
+    <div class="legend">
+      <span class="badge parks"></span> Parks (points)
+      <span class="badge neigh" style="margin-left:16px;"></span> Neighborhoods (polygons)
+    </div>
+
+    <button id="sortBtn">Sort by Name (A→Z)</button>
+    <table id="dataTable">
+      <tr>
+        <th>Name</th>
+        <th>Category</th>
+        <th>Notes</th>
+      </tr>
+      <!-- rows inserted by JS -->
+    </table>
+  </aside>
+
+  <script>
+    // 1) Mapbox token (replace with yours if needed)
+    mapboxgl.accessToken = 'pk.eyJ1Ijoib21hcjEyMTAtYSIsImEiOiJjbWhjZWJzNG4xOWtxMmtwenJpbTF5MmZmIn0.ugxCVu9XTQNmM11fhRmDeg';
+
+    // 2) Global refs
+    let map;
+    let parksData = null; // will populate table from this dataset
+
+    // 3) Async loader for Olympia datasets (export these from geojson.io)
+    async function geojsonFetch() {
+      // Load two datasets (adjust filenames to match your exported files)
+      const parksResp = await fetch('assets/olympia_parks.geojson');          // expected: Point features
+      parksData = await parksResp.json();
+
+      const neighResp = await fetch('assets/olympia_neighborhoods.geojson');  // expected: Polygon features
+      const neighborhoodsData = await neighResp.json();
+
+      // Create the map (different style from the satellite one)
+      map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/light-v10', // DIFFERENT base style
+        center: [-122.902, 47.037], // Olympia, WA
+        zoom: 12
+      });
+
+      map.on('load', () => {
+        // Add neighborhoods (polygons) as a fill layer
+        map.addSource('neighborhoods', {
+          type: 'geojson',
+          data: neighborhoodsData
+        });
+        map.addLayer({
+          id: 'neighborhoods-fill',
+          type: 'fill',
+          source: 'neighborhoods',
+          paint: {
+            'fill-color': '#3498db',
+            'fill-opacity': 0.25
+          }
+        });
+        map.addLayer({
+          id: 'neighborhoods-outline',
+          type: 'line',
+          source: 'neighborhoods',
+          paint: {
+            'line-color': '#2980b9',
+            'line-width': 1.25
+          }
+        });
+
+        // Add parks (points) as circles
+        map.addSource('parks', {
+          type: 'geojson',
+          data: parksData
+        });
+        map.addLayer({
+          id: 'parks-circles',
+          type: 'circle',
+          source: 'parks',
+          paint: {
+            'circle-radius': 6,
+            'circle-color': '#2ecc71',
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+
+        // Optional: click popup for parks
+        map.on('click', 'parks-circles', (e) => {
+          const f = e.features[0];
+          const p = f.properties || {};
+          const name = p.name || '(Unnamed park)';
+          const cat = p.category || p.type || 'Park';
+          const notes = p.notes || '';
+          new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`<strong>${name}</strong><br>${cat}${notes ? `<br>${notes}` : ''}`)
+            .addTo(map);
+        });
+
+        map.on('mouseenter', 'parks-circles', () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', 'parks-circles', () => map.getCanvas().style.cursor = '');
+
+        // Build the table using parks dataset
+        buildTableFromParks(parksData);
+
+        // Wire up sorting
+        document.getElementById('sortBtn').addEventListener('click', () => sortTableByName('dataTable'));
+      });
+    }
+
+    // 4) Build table rows from the parks dataset
+    function buildTableFromParks(geojson) {
+      const table = document.getElementById('dataTable');
+      for (let i = 0; i < geojson.features.length; i++) {
+        const props = geojson.features[i].properties || {};
+        const name = props.name || '(Unnamed)';
+        const category = props.category || props.type || 'Park';
+        const notes = props.notes || '';
+
+        const row = table.insertRow(-1);
+        row.insertCell(0).textContent = name;
+        row.insertCell(1).textContent = category;
+        row.insertCell(2).textContent = notes;
+      }
+    }
+
+    // 5) Sort table function (Name column A→Z); click again to toggle Z→A
+    let ascending = true;
+    function sortTableByName(tableId) {
+      const table = document.getElementById(tableId);
+      let switching = true;
+
+      while (switching) {
+        switching = false;
+        const rows = table.rows;
+
+        for (let i = 1; i < rows.length - 1; i++) {
+          let shouldSwitch = false;
+          const x = rows[i].getElementsByTagName('td')[0].textContent.toLowerCase();
+          const y = rows[i + 1].getElementsByTagName('td')[0].textContent.toLowerCase();
+
+          if (ascending ? x > y : x < y) {
+            shouldSwitch = true;
+          }
+          if (shouldSwitch) {
+            rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+            switching = true;
+            break;
+          }
+        }
+      }
+
+      // Toggle direction + button label
+      ascending = !ascending;
+      document.getElementById('sortBtn').textContent = ascending
+        ? 'Sort by Name (A→Z)'
+        : 'Sort by Name (Z→A)';
+    }
+
+    // 6) Kick things off
+    geojsonFetch();
+  </script>
+</body>
+</html>
