@@ -2,30 +2,21 @@
 <html lang="en-US">
 <head>
   <meta charset="utf-8">
-  <title>Olympia, WA — Map & List</title>
+  <title>Olympia, WA — Park & Neighborhood</title>
   <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
-
-  <!-- Mapbox CSS/JS -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.css" rel="stylesheet">
   <script src="https://api.mapbox.com/mapbox-gl-js/v2.5.0/mapbox-gl.js"></script>
 
   <style>
-    /* Full-screen map */
-    html, body {
-      height: 100%;
-      margin: 0;
-    }
-    #map {
-      position: fixed; /* full-bleed background */
-      inset: 0;
-    }
+    html, body { height: 100%; margin: 0; }
+    #map { position: fixed; inset: 0; }
 
-    /* Side panel overlays the map on the RIGHT */
+    /* Side panel on right */
     #side-panel {
       position: fixed;
       top: 16px;
       right: 16px;
-      width: 380px;
+      width: 360px;
       max-height: calc(100vh - 32px);
       overflow: auto;
       box-sizing: border-box;
@@ -36,222 +27,316 @@
       backdrop-filter: blur(4px);
     }
 
-    h2 {
-      margin: 0 0 12px 0;
-      font-size: 1.25rem;
-    }
+    h2 { margin: 0 0 8px 0; font-size: 1.2rem; }
+    .legend { display: flex; gap: 12px; align-items: center; margin: 4px 0 8px; font-size: 0.9rem; }
+    .badge { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.2); display:inline-block; }
+    .parks { background:#2ecc71; }
+    .neigh { background:#3498db; border-radius: 2px; width: 16px; height: 12px; }
 
-    button {
-      margin: 8px 0 12px 0;
-      cursor: pointer;
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid #ddd;
-      background: #f7f7f7;
-    }
+    button { margin: 8px 6px 12px 0; cursor: pointer; padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd; background: #f7f7f7; }
+    .btnrow { display:flex; flex-wrap: wrap; }
 
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      border: 1px solid #ddd;
-      font-size: 0.95rem;
-    }
-    th, td {
-      text-align: left;
-      padding: 10px 12px;
-    }
-    th {
-      background: #fafafa;
-      position: sticky;
-      top: 0;
-      z-index: 1;
-    }
-    tr:nth-child(even) { background-color: #f6f6f6; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid #ddd; font-size: 0.95rem; }
+    th, td { text-align: left; padding: 10px 12px; }
+    th { background: #fafafa; position: sticky; top: 0; z-index: 1; }
+    tr:nth-child(even) { background: #f6f6f6; }
+    tr.data-row { cursor: pointer; }
+    tr.data-row:hover { background:#eef6ff; }
 
-    /* Hide side panel on narrower screens (< 1024px) */
-    @media (max-width: 1024px) {
-      #side-panel { display: none; }
-    }
+    /* Hide panel on narrower screens */
+    @media (max-width: 1024px) { #side-panel { display: none; } }
 
-    /* Small helper for legend badge */
-    .legend {
-      display: flex; gap: 10px; align-items: center; margin-bottom: 8px;
-    }
-    .badge {
-      display: inline-block; width: 12px; height: 12px; border-radius: 50%;
-      border: 2px solid #fff;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
-    }
-    .parks { background: #2ecc71; }
-    .neigh { background: #3498db; border-radius: 2px; width: 16px; height: 12px; }
+    .error { color: #b00020; font-size: 0.9rem; }
   </style>
 </head>
 <body>
-  <!-- Full-screen map -->
   <div id="map"></div>
 
-  <!-- Overlay side panel (title + table + sort) -->
   <aside id="side-panel">
-    <h2>Olympia, WA — Parks & Neighborhoods</h2>
-
+    <h2>Olympia, WA — Park & Neighborhood</h2>
     <div class="legend">
-      <span class="badge parks"></span> Parks (points)
-      <span class="badge neigh" style="margin-left:16px;"></span> Neighborhoods (polygons)
+      <span class="badge parks"></span> Park
+      <span class="badge neigh"></span> Neighborhood
     </div>
 
-    <button id="sortBtn">Sort by Name (A→Z)</button>
+    <div class="btnrow">
+      <button id="sortBtn">Sort by Name (A→Z)</button>
+      <button id="zoomPark">Zoom to Park</button>
+      <button id="zoomNeigh">Zoom to Neighborhood</button>
+      <button id="zoomAll">Zoom to Both</button>
+    </div>
+
+    <div id="err" class="error"></div>
+
     <table id="dataTable">
       <tr>
         <th>Name</th>
         <th>Category</th>
         <th>Notes</th>
       </tr>
-      <!-- rows inserted by JS -->
     </table>
   </aside>
 
   <script>
-    // 1) Mapbox token (replace with yours if needed)
     mapboxgl.accessToken = 'pk.eyJ1Ijoib21hcjEyMTAtYSIsImEiOiJjbWhjZWJzNG4xOWtxMmtwenJpbTF5MmZmIn0.ugxCVu9XTQNmM11fhRmDeg';
 
-    // 2) Global refs
     let map;
-    let parksData = null; // will populate table from this dataset
+    let parkGJ = null;         // GeoJSON with 1 Point
+    let neighGJ = null;        // GeoJSON with 1 Polygon/MultiPolygon
 
-    // 3) Async loader for Olympia datasets (export these from geojson.io)
-    async function geojsonFetch() {
-      // Load two datasets (adjust filenames to match your exported files)
-      const parksResp = await fetch('assets/olympia_parks.geojson');          // expected: Point features
-      parksData = await parksResp.json();
-
-      const neighResp = await fetch('assets/olympia_neighborhoods.geojson');  // expected: Polygon features
-      const neighborhoodsData = await neighResp.json();
-
-      // Create the map (different style from the satellite one)
-      map = new mapboxgl.Map({
-        container: 'map',
-        style: 'mapbox://styles/mapbox/light-v10', // DIFFERENT base style
-        center: [-122.902, 47.037], // Olympia, WA
-        zoom: 12
-      });
-
-      map.on('load', () => {
-        // Add neighborhoods (polygons) as a fill layer
-        map.addSource('neighborhoods', {
-          type: 'geojson',
-          data: neighborhoodsData
-        });
-        map.addLayer({
-          id: 'neighborhoods-fill',
-          type: 'fill',
-          source: 'neighborhoods',
-          paint: {
-            'fill-color': '#3498db',
-            'fill-opacity': 0.25
-          }
-        });
-        map.addLayer({
-          id: 'neighborhoods-outline',
-          type: 'line',
-          source: 'neighborhoods',
-          paint: {
-            'line-color': '#2980b9',
-            'line-width': 1.25
-          }
-        });
-
-        // Add parks (points) as circles
-        map.addSource('parks', {
-          type: 'geojson',
-          data: parksData
-        });
-        map.addLayer({
-          id: 'parks-circles',
-          type: 'circle',
-          source: 'parks',
-          paint: {
-            'circle-radius': 6,
-            'circle-color': '#2ecc71',
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#ffffff'
-          }
-        });
-
-        // Optional: click popup for parks
-        map.on('click', 'parks-circles', (e) => {
-          const f = e.features[0];
-          const p = f.properties || {};
-          const name = p.name || '(Unnamed park)';
-          const cat = p.category || p.type || 'Park';
-          const notes = p.notes || '';
-          new mapboxgl.Popup()
-            .setLngLat(e.lngLat)
-            .setHTML(`<strong>${name}</strong><br>${cat}${notes ? `<br>${notes}` : ''}`)
-            .addTo(map);
-        });
-
-        map.on('mouseenter', 'parks-circles', () => map.getCanvas().style.cursor = 'pointer');
-        map.on('mouseleave', 'parks-circles', () => map.getCanvas().style.cursor = '');
-
-        // Build the table using parks dataset
-        buildTableFromParks(parksData);
-
-        // Wire up sorting
-        document.getElementById('sortBtn').addEventListener('click', () => sortTableByName('dataTable'));
-      });
-    }
-
-    // 4) Build table rows from the parks dataset
-    function buildTableFromParks(geojson) {
-      const table = document.getElementById('dataTable');
-      for (let i = 0; i < geojson.features.length; i++) {
-        const props = geojson.features[i].properties || {};
-        const name = props.name || '(Unnamed)';
-        const category = props.category || props.type || 'Park';
-        const notes = props.notes || '';
-
-        const row = table.insertRow(-1);
-        row.insertCell(0).textContent = name;
-        row.insertCell(1).textContent = category;
-        row.insertCell(2).textContent = notes;
-      }
-    }
-
-    // 5) Sort table function (Name column A→Z); click again to toggle Z→A
+    // Combined rows for the table 
+    let rowsModel = [];
     let ascending = true;
-    function sortTableByName(tableId) {
-      const table = document.getElementById(tableId);
-      let switching = true;
 
-      while (switching) {
-        switching = false;
-        const rows = table.rows;
+    const $ = (sel) => document.querySelector(sel);
+    function showError(msg) { console.error(msg); $('#err').textContent = msg; }
 
-        for (let i = 1; i < rows.length - 1; i++) {
-          let shouldSwitch = false;
-          const x = rows[i].getElementsByTagName('td')[0].textContent.toLowerCase();
-          const y = rows[i + 1].getElementsByTagName('td')[0].textContent.toLowerCase();
+    function propName(props) {
+      return props.name || props.NAME || props.title || '(Unnamed)';
+    }
+    function propNotes(props) {
+      return props.notes || props.description || props.DESC || '';
+    }
 
-          if (ascending ? x > y : x < y) {
-            shouldSwitch = true;
+    // get bounds for one feature (Point, Polygon, MultiPolygon)
+    function featureBounds(feat) {
+      const g = feat.geometry;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+      function expand(lon, lat) {
+        if (lon < minX) minX = lon;
+        if (lat < minY) minY = lat;
+        if (lon > maxX) maxX = lon;
+        if (lat > maxY) maxY = lat;
+      }
+
+      if (!g) return null;
+
+      if (g.type === 'Point') {
+        const [lon, lat] = g.coordinates;
+        expand(lon, lat);
+      } else if (g.type === 'Polygon') {
+        g.coordinates.forEach(ring => ring.forEach(([lon, lat]) => expand(lon, lat)));
+      } else if (g.type === 'MultiPolygon') {
+        g.coordinates.forEach(poly => poly.forEach(ring => ring.forEach(([lon, lat]) => expand(lon, lat))));
+      } else {
+        // Fallback: try to iterate any nested coord arrays
+        const walk = (arr) => Array.isArray(arr) ? arr.forEach(walk) : null;
+        walk(g.coordinates || []);
+      }
+      if (minX === Infinity) return null;
+      return [[minX, minY], [maxX, maxY]];
+    }
+
+    // combine two bounds
+    function combineBounds(b1, b2) {
+      if (!b1) return b2;
+      if (!b2) return b1;
+      const sw = [Math.min(b1[0][0], b2[0][0]), Math.min(b1[0][1], b2[0][1])];
+      const ne = [Math.max(b1[1][0], b2[1][0]), Math.max(b1[1][1], b2[1][1])];
+      return [sw, ne];
+    }
+
+    function fitToBounds(bounds, opts = {}) {
+      if (!bounds) return;
+      map.fitBounds(bounds, { padding: 80, duration: 900, ...opts });
+    }
+
+    // Build exactly two rows: one for the park, one for the neighborhood
+    function buildTable() {
+      const table = $('#dataTable');
+      // clear existing rows except header
+      while (table.rows.length > 1) table.deleteRow(1);
+      rowsModel = [];
+
+      // Park row
+      const pf = (parkGJ.features || [])[0];
+      if (pf) {
+        const p = pf.properties || {};
+        rowsModel.push({
+          id: 'park',
+          name: propName(p),
+          category: 'Park',
+          notes: propNotes(p),
+          center: pf.geometry.type === 'Point' ? pf.geometry.coordinates : null,
+          bounds: featureBounds(pf)
+        });
+      }
+
+      // Neighborhood row
+      const nf = (neighGJ.features || [])[0];
+      if (nf) {
+        const p = nf.properties || {};
+        rowsModel.push({
+          id: 'neigh',
+          name: propName(p),
+          category: 'Neighborhood',
+          notes: propNotes(p),
+          center: null,
+          bounds: featureBounds(nf)
+        });
+      }
+
+      // Render rows
+      for (const r of rowsModel) {
+        const tr = table.insertRow(-1);
+        tr.className = 'data-row';
+        tr.dataset.rowid = r.id;
+        tr.insertCell(0).textContent = r.name;
+        tr.insertCell(1).textContent = r.category;
+        tr.insertCell(2).textContent = r.notes || '';
+      }
+
+      // Click row to zoom
+      Array.from(document.querySelectorAll('tr.data-row')).forEach(tr => {
+        tr.addEventListener('click', () => {
+          const rid = tr.dataset.rowid;
+          const row = rowsModel.find(x => x.id === rid);
+          if (!row) return;
+          if (row.bounds) {
+            fitToBounds(row.bounds);
+          } else if (row.center) {
+            map.flyTo({ center: row.center, zoom: 15, speed: 0.8 });
           }
-          if (shouldSwitch) {
-            rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
-            switching = true;
-            break;
+        });
+      });
+    }
+
+    // Sort by name (A→Z then Z→A)
+    function sortTable() {
+      const table = $('#dataTable');
+      // simple swap for two rows
+      if (table.rows.length <= 2) {
+        // toggle by re-inserting the second row before the first (if needed)
+        const a = table.rows[1].cells[0].textContent.toLowerCase();
+        const b = table.rows[2] ? table.rows[2].cells[0].textContent.toLowerCase() : a;
+        const shouldSwap = (ascending && a > b) || (!ascending && a < b);
+        if (shouldSwap && table.rows[2]) {
+          table.tBodies[0].insertBefore(table.rows[2], table.rows[1]);
+        }
+      } else {
+        // generic fallback (won’t be used with just 2 rows)
+        let switching = true;
+        while (switching) {
+          switching = false;
+          for (let i = 1; i < table.rows.length - 1; i++) {
+            const x = table.rows[i].cells[0].textContent.toLowerCase();
+            const y = table.rows[i + 1].cells[0].textContent.toLowerCase();
+            const cond = ascending ? x > y : x < y;
+            if (cond) {
+              table.tBodies[0].insertBefore(table.rows[i + 1], table.rows[i]);
+              switching = true;
+              break;
+            }
           }
         }
       }
-
-      // Toggle direction + button label
       ascending = !ascending;
-      document.getElementById('sortBtn').textContent = ascending
-        ? 'Sort by Name (A→Z)'
-        : 'Sort by Name (Z→A)';
+      $('#sortBtn').textContent = ascending ? 'Sort by Name (A→Z)' : 'Sort by Name (Z→A)';
     }
 
-    // 6) Kick things off
-    geojsonFetch();
+    // buttons
+    function wireButtons(parkBounds, neighBounds, bothBounds) {
+      $('#sortBtn').addEventListener('click', sortTable);
+      $('#zoomPark').addEventListener('click', () => fitToBounds(parkBounds));
+      $('#zoomNeigh').addEventListener('click', () => fitToBounds(neighBounds));
+      $('#zoomAll').addEventListener('click', () => fitToBounds(bothBounds));
+    }
+
+    // Main
+    async function init() {
+      try {
+        // Load single-feature files
+        const pResp = await fetch('assets/olympia_parks.geojson');
+        if (!pResp.ok) throw new Error('Failed to load assets/olympia_parks.geojson');
+        parkGJ = await pResp.json();
+
+        const nResp = await fetch('assets/olympia_neighborhoods.geojson');
+        if (!nResp.ok) throw new Error('Failed to load assets/olympia_neighborhoods.geojson');
+        neighGJ = await nResp.json();
+
+        // Create the map (style different from satellite)
+        map = new mapboxgl.Map({
+          container: 'map',
+          style: 'mapbox://styles/mapbox/outdoors-v12',
+          center: [-122.902, 47.037], // Olympia
+          zoom: 12
+        });
+
+        map.on('load', () => {
+          // Sources
+          map.addSource('neighborhood', { type: 'geojson', data: neighGJ });
+          map.addSource('park',        { type: 'geojson', data: parkGJ  });
+
+          // Neighborhood fill + outline
+          map.addLayer({
+            id: 'neigh-fill',
+            type: 'fill',
+            source: 'neighborhood',
+            paint: { 'fill-color': '#3498db', 'fill-opacity': 0.25 }
+          });
+          map.addLayer({
+            id: 'neigh-outline',
+            type: 'line',
+            source: 'neighborhood',
+            paint: { 'line-color': '#2980b9', 'line-width': 1.25 }
+          });
+
+          // Park point
+          map.addLayer({
+            id: 'park-dot',
+            type: 'circle',
+            source: 'park',
+            paint: {
+              'circle-radius': 7,
+              'circle-color': '#2ecc71',
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#ffffff'
+            }
+          });
+
+          // Popups
+          map.on('click', 'park-dot', (e) => {
+            const f = e.features[0];
+            const p = f.properties || {};
+            new mapboxgl.Popup()
+              .setLngLat(e.lngLat)
+              .setHTML(`<strong>${propName(p)}</strong><br>${propNotes(p)}`)
+              .addTo(map);
+          });
+          map.on('click', 'neigh-fill', (e) => {
+            const f = e.features[0];
+            const p = f.properties || {};
+            new mapboxgl.Popup()
+              .setLngLat(e.lngLat)
+              .setHTML(`<strong>${propName(p)}</strong><br>Neighborhood<br>${propNotes(p)}`)
+              .addTo(map);
+          });
+          map.on('mouseenter', 'park-dot', () => map.getCanvas().style.cursor = 'pointer');
+          map.on('mouseleave', 'park-dot', () => map.getCanvas().style.cursor = '');
+          map.on('mouseenter', 'neigh-fill', () => map.getCanvas().style.cursor = 'pointer');
+          map.on('mouseleave', 'neigh-fill', () => map.getCanvas().style.cursor = '');
+
+          // Fit to show both features nicely
+          const pb = featureBounds(parkGJ.features[0]);
+          const nb = featureBounds(neighGJ.features[0]);
+          const both = combineBounds(pb, nb);
+          fitToBounds(both);
+
+          // Build the tiny table (2 rows) + wire buttons + row click zoom
+          buildTable();
+          wireButtons(pb, nb, both);
+        });
+      } catch (e) {
+        showError(e.message || String(e));
+      }
+    }
+
+    init();
+
+    // Surface unexpected errors to panel instead of “blank page”
+    window.addEventListener('error', (e) => showError(e.message));
+    window.addEventListener('unhandledrejection', (e) => showError(e.reason?.message || String(e.reason)));
   </script>
 </body>
 </html>
